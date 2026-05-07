@@ -49,31 +49,89 @@ of THAT frozen frame.
 Rules:
 1. Output ONE prompt as a single line of comma-separated phrases. No
    preamble, no commentary, no quotes, no markdown — just the prompt.
-2. Lead with the subject (what's most prominent in frame), then
-   composition (close-up / medium shot / wide shot / over-the-shoulder
-   / etc.), then setting, then lighting/mood, then technical modifiers
-   (lens, film stock, grain).
-3. Translate framing abbreviations to full English: CU → close-up, MS →
-   medium shot, WS → wide shot, ECU → extreme close-up.
-4. Drop camera-MOVE language entirely. "Dolly in on the car" becomes
-   "close-up of the car". "Pan across" becomes "wide shot of...". The
-   resulting frame is static.
-5. Use the scene heading (INT./EXT., location, time of day) to set
-   environment and lighting. INT. ... NIGHT → "interior, low warm
-   practical lighting, deep shadows".
-6. **Preserve named entities verbatim**, in their original casing, as
-   they appear in the shot description. Character names (ELIZA, STEPH),
-   vehicles (BRONCO, FORD BRONCO), props (TOY BRONCO), brands (FORD) —
-   keep them as written. The image model uses these as labels and you
-   lose the meaning if you lowercase them or paraphrase. If the shot
-   says "BRONCO" and context suggests a vehicle, you may add a brief
-   parenthetical hint once: "BRONCO (Ford Bronco SUV)" — but only if it
-   reduces ambiguity, and only on first mention in the prompt.
-7. Don't invent age or appearance unless the shot description specifies.
-8. Keep total length under ~60 words. Image-gen models perform worse on
-   long prompts.
-9. Do NOT add quality-booster cliches like "8k resolution", "highly
-   detailed", "trending on artstation" — the style preset adds those.
+
+2. Lead with the subject (what's most prominent in frame), then composition
+   (close-up / medium shot / wide shot / over-the-shoulder), then setting,
+   then lighting/mood, then technical modifiers (lens, film stock, grain).
+
+3. Translate framing abbreviations: CU → close-up, MS → medium shot,
+   WS → wide shot, ECU → extreme close-up. Drop camera-MOVE language
+   entirely (no "dolly in", "pan", "tracking shot"). The result is one
+   static frame.
+
+4. **NEVER quote brand or product names as if they're text on the object.**
+   Modern image models render quoted nouns as literal text. Instead,
+   describe the VISUAL appearance of the logo/badge/emblem.
+
+   ❌ BAD:  "FORD EMBLEM close-up on tailgate"
+            (renders "FORD EMBLEM" as text on the car)
+   ✅ GOOD: "close-up of the chrome script Ford badge centered on the
+            tailgate of a [vehicle from glossary]"
+
+   ❌ BAD:  "Coca-Cola can on the table"  (renders the actual logo wrong)
+   ✅ GOOD: "close-up of a red soda can with white script logo, on a table"
+
+5. **Pick ONE environment.** A shot is in EITHER an interior OR an
+   exterior, never both. The slugline INT./EXT. is a HINT — it tells you
+   which physical location the production crew was at — but the SHOT
+   DESCRIPTION's visual cues are authoritative. Treat exterior cues as
+   overriding the slugline:
+
+   Words that signal **EXTERIOR** of a vehicle (regardless of slugline):
+     hood, grille, bumper, fender, panel, headlights, taillights,
+     license plate, tire(s), wheel(s), back hatch, tailgate, door
+     (when described from outside, e.g. "side of the door"), emblem,
+     badge, paint, dust, mud on the body.
+
+   Words that signal **INTERIOR** of a vehicle:
+     dashboard, steering wheel, seat, seatbelt, mirror, rear-view,
+     windshield (from inside), passenger, driver, gear stick, console,
+     headliner.
+
+   If the shot says "CU on emblem on back hatch", that's exterior even
+   if the slugline is INT. — the badge lives on the outside surface.
+
+   Don't combine "interior of [vehicle]" + "inside [building]". That's
+   nonsense — pick one based on the shot.
+
+6. **If a glossary is provided, its specs are MANDATORY.** Copy year,
+   color, generation, and other identifiers verbatim. Do NOT invent
+   alternative years (no "1969 White") or alternative colors when the
+   glossary already pins them. Only describe traits the glossary or
+   shot description specifies.
+
+7. **Preserve character names** as in the shot (ELIZA, STEPH). For
+   vehicles/products, replace the all-caps shorthand with the
+   glossary's full description on first mention; afterwards a short
+   reference is fine.
+
+8. Use the scene heading (INT./EXT., location, time of day) to set
+   environment and lighting. EXT. ... MORNING → "soft golden morning
+   sunlight, long shadows". INT. ... NIGHT → "low warm practical
+   lighting, deep shadows".
+
+9. Don't invent age, appearance, mood, or weather not in the shot
+   description, scene heading, or glossary.
+
+10. Keep total length under ~60 words. Long prompts perform worse.
+
+11. Do NOT add quality-booster cliches ("8k resolution", "trending on
+    artstation", "highly detailed") — the style preset adds those.
+
+EXAMPLE:
+
+  Scene heading: INT. BRONCO / SUBURBAN HOUSE - MORNING — shot 1
+  Shot description: CU ON FORD EMBLUM ON BACK HATCH
+  Glossary: BRONCO = 6th-gen Ford Bronco SUV, red, 4-door, 2023 model
+
+  Good output:
+  close-up of the chrome Ford script badge centered on the rear tailgate of a red 2023 6th-generation Ford Bronco SUV, parked in a suburban driveway, soft morning sunlight across the panel, faint reflection of the house, shallow depth of field, 35mm
+
+  Why it works:
+    - Visual description of the badge, not "FORD EMBLEM" text-quoted.
+    - Vehicle taken from the glossary verbatim (red 2023 6th-gen).
+    - One environment: exterior driveway, not "inside the house".
+    - No invented year (1969) or color (white).
 """
 
 
