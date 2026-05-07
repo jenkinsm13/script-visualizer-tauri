@@ -381,28 +381,61 @@ async def _render_via_fal(
     return None
 
 
+# Flux.2 dev wants different defaults than SD 1.5 / SDXL — lower CFG,
+# moderate step count. Override per request or via env.
+_RENDER_STEPS = int(os.environ.get("SV_RENDER_STEPS", "30"))
+_RENDER_CFG = float(os.environ.get("SV_RENDER_CFG", "4.5"))
+# When references are passed, denoising_strength controls how much the
+# output deviates from the reference. ~0.7 = strong influence kept;
+# 0.4 = mostly the prompt, references guide style/composition.
+_RENDER_DENOISE = float(os.environ.get("SV_RENDER_DENOISE", "0.7"))
+
+
 async def _render_via_a1111(
-    prompt: str, negative: str, w: int, h: int
+    prompt: str,
+    negative: str,
+    w: int,
+    h: int,
+    refs: Optional[list[str]] = None,
 ) -> Optional[bytes]:
-    """Try AUTOMATIC1111-compatible API at SD_URL. Returns None if not reachable."""
+    """Render via AUTOMATIC1111-compatible API at SD_URL.
+
+    Routes through /sdapi/v1/txt2img when no references, or
+    /sdapi/v1/img2img when refs are provided. DrawThings exposes both
+    endpoints and natively supports Flux.2 multi-image conditioning by
+    accepting multiple init_images. If only one reference is passed,
+    it's used as a single init image. Returns None on connection
+    failure so the caller can fall back to other backends.
+    """
     base = os.environ.get("SD_URL")
     if not base:
         return None
+
+    refs = refs or []
+    common: dict = {
+        "prompt": prompt,
+        "negative_prompt": negative,
+        "width": w,
+        "height": h,
+        "steps": _RENDER_STEPS,
+        "cfg_scale": _RENDER_CFG,
+    }
+
     try:
-        # Flux Kontext at 1920×1080 on Apple Silicon takes 45-90s; 240s
-        # gives headroom for cold model load on the first call.
-        async with httpx.AsyncClient(timeout=240.0) as client:
-            r = await client.post(
-                f"{base.rstrip('/')}/sdapi/v1/txt2img",
-                json={
-                    "prompt": prompt,
-                    "negative_prompt": negative,
-                    "width": w,
-                    "height": h,
-                    "steps": 28,
-                    "cfg_scale": 7.0,
-                },
-            )
+        # Flux.2 dev at 1920×1080 on Apple Silicon takes 60-90s; 300s
+        # gives headroom for first-call cold model load.
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            if refs:
+                payload = {
+                    **common,
+                    "init_images": refs,
+                    "denoising_strength": _RENDER_DENOISE,
+                }
+                endpoint = f"{base.rstrip('/')}/sdapi/v1/img2img"
+            else:
+                payload = common
+                endpoint = f"{base.rstrip('/')}/sdapi/v1/txt2img"
+            r = await client.post(endpoint, json=payload)
             r.raise_for_status()
             data = r.json()
             imgs = data.get("images") or []
@@ -461,10 +494,14 @@ async def render(req: RenderRequest) -> RenderResponse:
 
     # Try real backends in order of preference, falling back to a placeholder.
     img_bytes = await _render_via_a1111(
-        full_prompt, req.negative_prompt, req.width, req.height
+        full_prompt,
+        req.negative_prompt,
+        req.width,
+        req.height,
+        refs=req.reference_images,
     )
     if img_bytes:
-        backend = "a1111"
+        backend = "a1111+refs" if req.reference_images else "a1111"
     if img_bytes is None:
         img_bytes = await _render_via_replicate(full_prompt, req.width, req.height)
         if img_bytes:

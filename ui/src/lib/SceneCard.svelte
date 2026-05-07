@@ -25,6 +25,67 @@
   let promptState = $state<"idle" | "loading" | "ready" | "error">("idle");
   let promptError = $state<string | null>(null);
 
+  // Reference images for Flux.2 multi-image conditioning (character/style/
+  // composition consistency across shots). Stored as { dataUrl, base64 }
+  // — dataUrl for <img> preview, base64 for the /render payload.
+  type Ref = { dataUrl: string; base64: string; name: string };
+  let refs = $state<Ref[]>([]);
+  let refError = $state<string | null>(null);
+
+  function _fileToRef(file: File): Promise<Ref> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        // strip "data:image/png;base64," prefix
+        const comma = dataUrl.indexOf(",");
+        const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+        resolve({ dataUrl, base64, name: file.name });
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function addReferences(files: FileList | File[] | null) {
+    if (!files) return;
+    refError = null;
+    const wanted = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (!wanted.length) {
+      refError = "no image files in drop";
+      return;
+    }
+    try {
+      const newRefs = await Promise.all(wanted.map(_fileToRef));
+      refs = [...refs, ...newRefs].slice(0, 4); // cap at 4
+    } catch (e) {
+      refError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  function removeRef(i: number) {
+    refs = refs.filter((_, idx) => idx !== i);
+  }
+
+  let dragOver = $state(false);
+  function onDrop(e: DragEvent) {
+    e.preventDefault();
+    dragOver = false;
+    addReferences(e.dataTransfer?.files ?? null);
+  }
+  function onDragOver(e: DragEvent) {
+    e.preventDefault();
+    dragOver = true;
+  }
+  function onDragLeave() {
+    dragOver = false;
+  }
+  function onPickFiles(e: Event) {
+    const input = e.target as HTMLInputElement;
+    addReferences(input.files);
+    input.value = ""; // allow re-picking same file
+  }
+
   // What gets sent to /render: generated prompt if available, else the
   // rule-based base_prompt the parser produced.
   const effectivePrompt = $derived(
@@ -71,6 +132,7 @@
         style_id: styleId,
         width,
         height,
+        reference_images: refs.map((r) => r.base64),
       });
       imageUrl = renderImageUrl(r.image_url);
       renderBackend = r.backend;
@@ -150,6 +212,52 @@
           <div class="prompt-err">prompt-gen failed: {promptError}</div>
         {/if}
       </details>
+
+      <!-- Reference images: drop or click to add. Used by the render call
+           as Flux.2 multi-image inputs. -->
+      <div
+        class="refs"
+        class:dragover={dragOver}
+        ondrop={onDrop}
+        ondragover={onDragOver}
+        ondragleave={onDragLeave}
+        role="region"
+        aria-label="Reference images"
+      >
+        {#if refs.length === 0}
+          <label class="refs-empty">
+            <input type="file" accept="image/*" multiple onchange={onPickFiles} />
+            <span class="dim">drop reference image(s) here, or click to pick</span>
+          </label>
+        {:else}
+          <div class="refs-row">
+            {#each refs as r, i (i)}
+              <figure class="ref-thumb" title={r.name}>
+                <img src={r.dataUrl} alt={r.name} />
+                <button
+                  type="button"
+                  class="ref-remove"
+                  onclick={() => removeRef(i)}
+                  aria-label="remove reference">×</button>
+              </figure>
+            {/each}
+            {#if refs.length < 4}
+              <label class="ref-add">
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onchange={onPickFiles}
+                />
+                <span>+</span>
+              </label>
+            {/if}
+          </div>
+        {/if}
+        {#if refError}
+          <div class="prompt-err">{refError}</div>
+        {/if}
+      </div>
     </div>
   </div>
 
@@ -310,4 +418,78 @@
     color: #ff6b6b;
     font-size: 11px;
   }
+
+  /* Reference-image drop zone */
+  .refs {
+    margin-top: 8px;
+    border: 1px dashed #3a3f4a;
+    border-radius: 6px;
+    padding: 8px;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .refs.dragover {
+    border-color: #4ec3ff;
+    background: rgba(78, 195, 255, 0.06);
+  }
+  .refs-empty {
+    display: block;
+    text-align: center;
+    padding: 14px 8px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .refs-empty input[type="file"] {
+    display: none;
+  }
+  .refs-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .ref-thumb {
+    margin: 0;
+    position: relative;
+    width: 60px;
+    height: 60px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #15171d;
+    border: 1px solid #2a2f3a;
+  }
+  .ref-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .ref-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 18px;
+    height: 18px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    font-size: 14px;
+    line-height: 14px;
+    padding: 0;
+    cursor: pointer;
+  }
+  .ref-add {
+    width: 60px;
+    height: 60px;
+    border: 1px dashed #3a3f4a;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #6b7280;
+    font-size: 22px;
+    cursor: pointer;
+  }
+  .ref-add:hover { color: #c5c8cf; border-color: #4a5160; }
+  .ref-add input[type="file"] { display: none; }
 </style>

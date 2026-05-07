@@ -119,6 +119,7 @@ export async function renderScene(opts: {
   width?: number;
   height?: number;
   negative_prompt?: string;
+  reference_images?: string[]; // base64 strings (no data: prefix)
 }): Promise<RenderResult> {
   const r = await fetch(`${SERVER}/render`, {
     method: "POST",
