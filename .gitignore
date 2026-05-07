@@ -25,3 +25,4 @@ storyboards/
 .env
 .env.local
 *.log
+.cache/
