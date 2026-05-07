@@ -24,6 +24,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from src import ScriptParser
+from src.core import shotlist as _shotlist  # noqa: F401  used in /parse-shotlist
 from src.core.scene import Scene
 
 
@@ -138,6 +139,42 @@ def parse(req: ParseRequest) -> ParseResponse:
         raise HTTPException(status_code=400, detail="empty screenplay text")
     parser = ScriptParser()
     scenes = parser.parse_script(req.text)
+    return ParseResponse(scenes=[_scene_to_dto(s) for s in scenes])
+
+
+# ------- shot list -------
+
+
+class ShotListRequest(BaseModel):
+    """Either text (pasted shot list) OR pdf_base64 (PDF bytes b64-encoded)."""
+
+    text: Optional[str] = None
+    pdf_base64: Optional[str] = None
+
+
+@app.post("/parse-shotlist", response_model=ParseResponse)
+def parse_shotlist(req: ShotListRequest) -> ParseResponse:
+    """Parse a shot list into one Scene-shaped card per shot.
+
+    Each numbered line under an INT./EXT. heading becomes its own card —
+    distinct from /parse, where each scene aggregates many shots.
+    """
+    if req.pdf_base64:
+        try:
+            pdf_bytes = base64.b64decode(req.pdf_base64)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"bad pdf_base64: {exc}")
+        scenes = _shotlist.parse_shot_list_pdf(pdf_bytes)
+    elif req.text and req.text.strip():
+        scenes = _shotlist.parse_shot_list(req.text)
+    else:
+        raise HTTPException(status_code=400, detail="provide either text or pdf_base64")
+    if not scenes:
+        raise HTTPException(
+            status_code=422,
+            detail="no shots detected — expecting headers like 'INT. LOCATION - TIME' "
+            "followed by numbered lines '1) DESCRIPTION'",
+        )
     return ParseResponse(scenes=[_scene_to_dto(s) for s in scenes])
 
 

@@ -73,6 +73,19 @@ export async function parseScript(text: string): Promise<Scene[]> {
   return data.scenes;
 }
 
+export async function parseShotList(payload: {
+  text?: string;
+  pdf_base64?: string;
+}): Promise<Scene[]> {
+  const r = await fetch(`${SERVER}/parse-shotlist`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await jsonOrThrow<{ scenes: Scene[] }>(r);
+  return data.scenes;
+}
+
 export async function getStyles(): Promise<StylePreset[]> {
   return jsonOrThrow(await fetch(`${SERVER}/styles`));
 }

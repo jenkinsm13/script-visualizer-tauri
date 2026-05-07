@@ -12,7 +12,7 @@ dependencies = [
     "uvicorn>=0.30",
     # Image generation clients (kept loose; pin once we know which backend wins)
     "pillow>=10.0",
-    # Screenplay parsing — the original used custom regex; revisit if needed
+    "pymupdf>=1.26",
 ]
 
 [tool.setuptools.packages.find]

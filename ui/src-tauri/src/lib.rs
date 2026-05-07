@@ -15,9 +15,26 @@ fn repo_root() -> PathBuf {
     p
 }
 
+fn resolve_python(root: &PathBuf) -> String {
+    // Explicit override wins.
+    if let Ok(p) = std::env::var("SV_PYTHON") {
+        return p;
+    }
+    // Look for the project's own venv first — this is what the Python deps
+    // (uvicorn, fastapi, pillow, …) are installed into.
+    let venv_python = root.join(".venv").join("bin").join("python");
+    if venv_python.exists() {
+        return venv_python.to_string_lossy().into_owned();
+    }
+    // Last resort: whatever `python` is on PATH. Will fail with
+    // ModuleNotFoundError if the user hasn't created the venv.
+    "python".to_string()
+}
+
 fn spawn_server() -> Result<Child, std::io::Error> {
     let root = repo_root();
-    let python = std::env::var("SV_PYTHON").unwrap_or_else(|_| "python".to_string());
+    let python = resolve_python(&root);
+    eprintln!("[tauri] using python: {}", python);
     Command::new(python)
         .args(["-m", "server"])
         .current_dir(&root)

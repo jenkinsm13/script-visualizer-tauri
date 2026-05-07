@@ -4,6 +4,7 @@
     getHealth,
     getStyles,
     parseScript,
+    parseShotList,
     type Health,
     type Scene,
     type StylePreset,
@@ -13,10 +14,14 @@
   let health = $state<Health | null>(null);
   let healthError = $state<string | null>(null);
 
+  type Mode = "screenplay" | "shotlist";
+  let mode = $state<Mode>("screenplay");
+
   let scriptText = $state("");
   let scenes = $state<Scene[]>([]);
   let parsing = $state(false);
   let parseError = $state<string | null>(null);
+  let loadedFileName = $state<string | null>(null);
 
   let styles = $state<StylePreset[]>([]);
   let selectedStyle = $state("cinematic");
@@ -39,21 +44,58 @@
     }
   }
 
+  function _u8ToBase64(bytes: Uint8Array): string {
+    let bin = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      bin += String.fromCharCode.apply(
+        null,
+        bytes.subarray(i, i + chunk) as unknown as number[],
+      );
+    }
+    return btoa(bin);
+  }
+
   async function openFile() {
-    // Tauri 2 dialog plugin (lazy-imported so the page works without Tauri).
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
-      const path = await open({
-        multiple: false,
-        filters: [
-          { name: "Screenplay", extensions: ["txt", "fountain", "fdx", "md"] },
-          { name: "Any", extensions: ["*"] },
-        ],
-      });
+      const filters =
+        mode === "shotlist"
+          ? [
+              { name: "Shot list", extensions: ["pdf", "txt", "md"] },
+              { name: "Any", extensions: ["*"] },
+            ]
+          : [
+              {
+                name: "Screenplay",
+                extensions: ["txt", "fountain", "fdx", "md"],
+              },
+              { name: "Any", extensions: ["*"] },
+            ];
+      const path = await open({ multiple: false, filters });
       if (typeof path !== "string") return;
-      const { readTextFile } = await import("@tauri-apps/plugin-fs");
-      scriptText = await readTextFile(path);
-      // auto-parse on load
+      loadedFileName = path.split("/").pop() ?? path;
+      const fs = await import("@tauri-apps/plugin-fs");
+
+      if (mode === "shotlist" && path.toLowerCase().endsWith(".pdf")) {
+        // PDF → read as bytes, base64-encode, send to /parse-shotlist
+        const bytes = await fs.readFile(path);
+        const b64 = _u8ToBase64(bytes);
+        scriptText = `[PDF loaded: ${loadedFileName} — ${(bytes.length / 1024).toFixed(1)} KB]`;
+        parsing = true;
+        parseError = null;
+        try {
+          scenes = await parseShotList({ pdf_base64: b64 });
+        } catch (e) {
+          parseError = e instanceof Error ? e.message : String(e);
+        } finally {
+          parsing = false;
+        }
+        return;
+      }
+
+      // Plain text path (screenplay or text shot list)
+      scriptText = await fs.readTextFile(path);
       parse();
     } catch (e) {
       parseError = `file open: ${e instanceof Error ? e.message : String(e)}`;
@@ -65,7 +107,11 @@
     parsing = true;
     parseError = null;
     try {
-      scenes = await parseScript(scriptText);
+      if (mode === "shotlist") {
+        scenes = await parseShotList({ text: scriptText });
+      } else {
+        scenes = await parseScript(scriptText);
+      }
     } catch (e) {
       parseError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -88,7 +134,21 @@
   <header class="topbar">
     <div class="title">
       <h1>Script Visualizer</h1>
-      <span class="dim">screenplay → storyboard</span>
+      <span class="dim">{mode === "shotlist" ? "shot list" : "screenplay"} → storyboard</span>
+    </div>
+    <div class="mode-toggle" role="tablist">
+      <button
+        role="tab"
+        aria-selected={mode === "screenplay"}
+        class:active={mode === "screenplay"}
+        onclick={() => (mode = "screenplay")}
+        disabled={parsing}>Screenplay</button>
+      <button
+        role="tab"
+        aria-selected={mode === "shotlist"}
+        class:active={mode === "shotlist"}
+        onclick={() => (mode = "shotlist")}
+        disabled={parsing}>Shot list</button>
     </div>
     <div class="status">
       {#if health}
@@ -107,10 +167,15 @@
   <section class="input-row">
     <textarea
       bind:value={scriptText}
-      placeholder="Paste screenplay here, or click 'Open file' below…"
+      placeholder={mode === "shotlist"
+        ? "Paste shot list here, or click 'Open file' to load a PDF…"
+        : "Paste screenplay here, or click 'Open file' below…"}
       rows="6"
       disabled={parsing}
     ></textarea>
+    {#if loadedFileName}
+      <div class="loaded">📄 {loadedFileName}</div>
+    {/if}
     <div class="controls">
       <button class="primary" onclick={parse} disabled={parsing || !scriptText.trim()}>
         {parsing ? "parsing…" : "Parse"}
@@ -134,8 +199,13 @@
   {#if scenes.length === 0 && !parseError}
     <section class="empty">
       <h2>Empty.</h2>
-      <p>Drop a screenplay (.txt / .fountain / .md) or paste raw screenplay text and hit <strong>Parse</strong>.</p>
-      <p class="dim">Each scene becomes a card. Click <strong>render</strong> on any card to generate a storyboard image.</p>
+      {#if mode === "shotlist"}
+        <p>Open a shot-list PDF or paste shot-list text. Format expected: <code>INT./EXT. LOCATION - TIME</code> headers followed by numbered shots <code>1) DESCRIPTION</code>.</p>
+        <p class="dim">Each shot becomes its own card with its own image. Hit <strong>render</strong> per card.</p>
+      {:else}
+        <p>Drop a screenplay (.txt / .fountain / .md) or paste raw screenplay text and hit <strong>Parse</strong>.</p>
+        <p class="dim">Each scene becomes a card. Click <strong>render</strong> on any card to generate a storyboard image.</p>
+      {/if}
       <p class="dim small">
         Image generation backends (in priority order):
         <code>SD_URL=http://localhost:7860</code> (AUTOMATIC1111),
@@ -177,6 +247,37 @@
     display: inline;
   }
   .title .dim { margin-left: 10px; font-size: 12px; }
+  .mode-toggle {
+    display: flex;
+    background: #1c1f27;
+    border: 1px solid #2a2f3a;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-left: 14px;
+  }
+  .mode-toggle button {
+    background: transparent;
+    color: #8b919c;
+    border: none;
+    padding: 6px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .mode-toggle button.active {
+    background: #2a2f3a;
+    color: #e8eaed;
+  }
+  .mode-toggle button:hover:not(.active):not(:disabled) {
+    background: #1f232c;
+    color: #c5c8cf;
+  }
+  .mode-toggle button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .loaded {
+    margin-top: 8px;
+    font-size: 11px;
+    color: #5fcf80;
+  }
   .status { margin-left: auto; font-size: 12px; }
   .ok { color: #5fcf80; }
   .err { color: #ff6b6b; }
