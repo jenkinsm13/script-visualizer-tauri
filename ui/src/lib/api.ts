@@ -103,6 +103,7 @@ export async function generatePromptForScene(opts: {
   characters?: string[];
   description: string;
   model?: string;
+  glossary?: string;
 }): Promise<GeneratedPromptResult> {
   const r = await fetch(`${SERVER}/generate-prompt`, {
     method: "POST",

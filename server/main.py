@@ -250,6 +250,10 @@ class GeneratePromptRequest(BaseModel):
     characters: list[str] = []
     description: str
     model: Optional[str] = None
+    # Project-wide subject glossary, e.g. "BRONCO = 6th-gen Ford Bronco SUV,
+    # red, 4-door". Injected verbatim into the LLM input so character/vehicle
+    # /prop identity stays consistent across shots in the same project.
+    glossary: Optional[str] = None
 
 
 class GeneratePromptResponse(BaseModel):
@@ -271,6 +275,7 @@ def generate_prompt(req: GeneratePromptRequest) -> GeneratePromptResponse:
             characters=req.characters,
             description=req.description,
             model=req.model,
+            glossary=req.glossary,
         )
     except RuntimeError as exc:
         # prompt_gen raises RuntimeError with user-readable detail —

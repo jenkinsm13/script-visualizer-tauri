@@ -26,6 +26,24 @@
   let styles = $state<StylePreset[]>([]);
   let selectedStyle = $state("cinematic");
 
+  // Project-wide subject glossary. The LLM that builds image prompts (per
+  // SceneCard) gets this as context so character/vehicle/prop identity
+  // stays consistent across shots — e.g. "BRONCO = 6th-gen Ford Bronco
+  // SUV, red, 4-door, soft top". Persisted to localStorage so it survives
+  // app restarts.
+  const GLOSSARY_KEY = "sv:glossary";
+  let glossary = $state(
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem(GLOSSARY_KEY) ?? ""
+      : "",
+  );
+  let glossaryOpen = $state(false);
+  $effect(() => {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(GLOSSARY_KEY, glossary);
+    }
+  });
+
   // 2:1 aspect (Univisium / cinematic storyboard). Dims are multiples of 64
   // to match Flux's tile constraints — DrawThings rounds non-multiples down
   // silently. Times are Flux.2 [dev] (32B) on M5 Max @ 30 steps.
@@ -217,6 +235,27 @@
     {#if parseError}
       <div class="err-box">{parseError}</div>
     {/if}
+
+    <!-- Project subject glossary. One per app (persisted to localStorage).
+         Fed into every per-shot prompt-gen call so vehicles/characters/
+         props stay consistent. -->
+    <details class="glossary" bind:open={glossaryOpen}>
+      <summary>
+        Subject glossary
+        {#if glossary.trim()}
+          <span class="dim glossary-count">
+            ({glossary.split("\n").filter((l) => l.trim()).length} entries)
+          </span>
+        {:else}
+          <span class="dim">— pin character / vehicle / prop identities so prompts stay consistent across shots</span>
+        {/if}
+      </summary>
+      <textarea
+        bind:value={glossary}
+        rows="4"
+        placeholder={`one per line, NAME = description\nBRONCO = 6th-gen Ford Bronco SUV, red, 4-door, soft top, 2023 model\nELIZA = woman 30s, brown hair, blue denim jacket\nSTEPH = girl 6 years old, blonde pigtails, pink dress`}
+      ></textarea>
+    </details>
   </section>
 
   {#if scenes.length === 0 && !parseError}
@@ -245,6 +284,7 @@
           {styles}
           width={currentRes.w}
           height={currentRes.h}
+          {glossary}
         />
       {/each}
     </section>
@@ -381,6 +421,43 @@
     border-radius: 5px;
     color: #ff6b6b;
     font-size: 12px;
+  }
+  .glossary {
+    margin-top: 10px;
+    border: 1px solid #2a2f3a;
+    border-radius: 6px;
+    background: #15171d;
+  }
+  .glossary > summary {
+    cursor: pointer;
+    padding: 8px 12px;
+    font-size: 12px;
+    list-style: none;
+    user-select: none;
+  }
+  .glossary > summary::-webkit-details-marker { display: none; }
+  .glossary > summary::before {
+    content: "▸";
+    color: #6b7280;
+    margin-right: 6px;
+    font-size: 10px;
+  }
+  .glossary[open] > summary::before { content: "▾"; }
+  .glossary-count { color: #5fcf80; font-weight: 600; }
+  .glossary textarea {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    border: none;
+    border-top: 1px solid #2a2f3a;
+    border-radius: 0;
+    background: #15171d;
+    color: #e8eaed;
+    padding: 10px 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    resize: vertical;
   }
 
   .empty {

@@ -8,8 +8,15 @@
     styles: StylePreset[];
     width?: number;
     height?: number;
+    glossary?: string;
   };
-  let { scene, styleId, width = 1920, height = 1080 }: Props = $props();
+  let {
+    scene,
+    styleId,
+    width = 1024,
+    height = 512,
+    glossary = "",
+  }: Props = $props();
 
   let renderState = $state<"idle" | "loading" | "ready" | "error">("idle");
   let imageUrl = $state<string | null>(null);
@@ -111,6 +118,7 @@
         time_of_day: scene.location.time_of_day,
         characters: scene.characters.map((c) => c.name),
         description: shotDescription,
+        glossary: glossary && glossary.trim() ? glossary : undefined,
       });
       generatedPrompt = r.text;
       promptModel = r.model;
