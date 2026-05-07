@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Scene, StylePreset } from "./api";
-  import { renderScene, renderImageUrl } from "./api";
+  import { generatePromptForScene, renderScene, renderImageUrl } from "./api";
 
   type Props = { scene: Scene; styleId: string; styles: StylePreset[] };
   let { scene, styleId }: Props = $props();
@@ -11,13 +11,57 @@
   let renderDetail = $state<string>("");
   let renderError = $state<string | null>(null);
 
+  // LLM-generated image prompt. When present, overrides scene.base_prompt
+  // for the next render. Editable so the user can tweak before rendering.
+  let generatedPrompt = $state<string | null>(null);
+  let promptModel = $state<string>("");
+  let promptElapsed = $state<number>(0);
+  let promptState = $state<"idle" | "loading" | "ready" | "error">("idle");
+  let promptError = $state<string | null>(null);
+
+  // What gets sent to /render: generated prompt if available, else the
+  // rule-based base_prompt the parser produced.
+  const effectivePrompt = $derived(
+    (generatedPrompt && generatedPrompt.trim()) || scene.base_prompt,
+  );
+
+  // The shot description the LLM should translate. For shot-list cards
+  // there's exactly one action_descriptions entry per shot; for screenplay
+  // scenes, join the lot.
+  const shotDescription = $derived(
+    scene.action_descriptions.length > 0
+      ? scene.action_descriptions.join(" ")
+      : scene.heading,
+  );
+
+  async function generatePrompt() {
+    promptState = "loading";
+    promptError = null;
+    try {
+      const r = await generatePromptForScene({
+        heading: scene.heading,
+        setting: `${scene.location.setting_type} ${scene.location.name}`,
+        time_of_day: scene.location.time_of_day,
+        characters: scene.characters.map((c) => c.name),
+        description: shotDescription,
+      });
+      generatedPrompt = r.text;
+      promptModel = r.model;
+      promptElapsed = r.elapsed_seconds;
+      promptState = "ready";
+    } catch (e) {
+      promptError = e instanceof Error ? e.message : String(e);
+      promptState = "error";
+    }
+  }
+
   async function render() {
     renderState = "loading";
     renderError = null;
     try {
       const r = await renderScene({
         scene_idx: scene.number - 1,
-        prompt: scene.base_prompt,
+        prompt: effectivePrompt,
         style_id: styleId,
       });
       imageUrl = renderImageUrl(r.image_url);
@@ -76,16 +120,48 @@
           {/each}
         </details>
       {/if}
-      <details class="prompt">
-        <summary>prompt</summary>
-        <pre>{scene.base_prompt}</pre>
+      <details class="prompt" open={generatedPrompt !== null}>
+        <summary>
+          {#if generatedPrompt !== null}
+            prompt <span class="model-tag">{promptModel} · {promptElapsed.toFixed(1)}s</span>
+          {:else}
+            prompt <span class="dim">(rule-based — click "generate prompt" to enhance)</span>
+          {/if}
+        </summary>
+        {#if generatedPrompt !== null}
+          <textarea
+            class="prompt-edit"
+            bind:value={generatedPrompt}
+            rows="3"
+            placeholder="image-gen prompt"
+          ></textarea>
+        {:else}
+          <pre>{scene.base_prompt}</pre>
+        {/if}
+        {#if promptError}
+          <div class="prompt-err">prompt-gen failed: {promptError}</div>
+        {/if}
       </details>
     </div>
   </div>
 
   <footer>
+    <button
+      class="ghost"
+      onclick={generatePrompt}
+      disabled={promptState === "loading"}
+      title="Use the local LLM to translate this shot into a still-frame image-gen prompt"
+    >
+      {#if promptState === "loading"}
+        thinking…
+      {:else if generatedPrompt !== null}
+        regenerate prompt
+      {:else}
+        generate prompt
+      {/if}
+    </button>
     <button onclick={render} disabled={renderState === "loading"}>
-      {renderState === "ready" ? "regenerate" : "render"}
+      {renderState === "ready" ? "re-render" : "render"}
     </button>
   </footer>
 </div>
@@ -178,17 +254,52 @@
   footer {
     padding: 10px 14px;
     border-top: 1px solid #2a2f3a;
+    display: flex;
+    gap: 8px;
   }
   footer button {
-    width: 100%;
-    background: #2a2f3a;
-    color: #e8eaed;
-    border: 1px solid #3a3f4a;
+    flex: 1;
+    background: #4ec3ff;
+    color: #15171d;
+    border: 1px solid #4ec3ff;
     padding: 6px 10px;
     border-radius: 5px;
     font-size: 12px;
+    font-weight: 600;
     cursor: pointer;
   }
-  footer button:hover:not(:disabled) { background: #3a3f4a; }
+  footer button:hover:not(:disabled) { background: #7fd5ff; }
   footer button:disabled { opacity: 0.5; cursor: not-allowed; }
+  footer button.ghost {
+    background: #2a2f3a;
+    color: #e8eaed;
+    border-color: #3a3f4a;
+    font-weight: 500;
+  }
+  footer button.ghost:hover:not(:disabled) { background: #3a3f4a; }
+  .model-tag {
+    color: #5fcf80;
+    font-size: 10px;
+    margin-left: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .prompt-edit {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 6px;
+    background: #15171d;
+    border: 1px solid #2a2f3a;
+    color: #e8eaed;
+    border-radius: 4px;
+    padding: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+  .prompt-err {
+    margin-top: 6px;
+    color: #ff6b6b;
+    font-size: 11px;
+  }
 </style>

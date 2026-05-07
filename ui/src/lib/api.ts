@@ -90,6 +90,28 @@ export async function getStyles(): Promise<StylePreset[]> {
   return jsonOrThrow(await fetch(`${SERVER}/styles`));
 }
 
+export type GeneratedPromptResult = {
+  text: string;
+  model: string;
+  elapsed_seconds: number;
+};
+
+export async function generatePromptForScene(opts: {
+  heading: string;
+  setting: string;
+  time_of_day?: string;
+  characters?: string[];
+  description: string;
+  model?: string;
+}): Promise<GeneratedPromptResult> {
+  const r = await fetch(`${SERVER}/generate-prompt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
+  return jsonOrThrow(r);
+}
+
 export async function renderScene(opts: {
   scene_idx: number;
   prompt: string;

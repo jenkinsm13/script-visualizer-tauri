@@ -1,3 +1,3 @@
-from .style_manager import StyleManager, StyleTemplate
-from .visual_analysis import VisualAnalyzer
-from .sd_connector import StableDiffusionConnector, SDGenerationParams
+# Intentionally empty. Submodules import their own deps lazily so that
+# pulling one (e.g. prompt_gen) doesn't drag in heavyweight or unwanted
+# deps from siblings (e.g. sd_connector's aiohttp-based legacy client).

@@ -24,6 +24,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from src import ScriptParser
+from src.ai import prompt_gen as _prompt_gen  # noqa: F401  used in /generate-prompt
 from src.core import shotlist as _shotlist  # noqa: F401  used in /parse-shotlist
 from src.core.scene import Scene
 
@@ -231,6 +232,55 @@ class StyleDTO(BaseModel):
 @app.get("/styles", response_model=list[StyleDTO])
 def styles() -> list[StyleDTO]:
     return [StyleDTO(**s) for s in _STYLES]
+
+
+# ------- LLM prompt generation -------
+
+
+class GeneratePromptRequest(BaseModel):
+    """Generate an image-gen prompt from a shot, via local LLM (Ollama).
+
+    Pass a SceneDTO-shaped subset; we use it to build the LLM input. Model
+    defaults to env SV_PROMPT_MODEL → OLLAMA_MODEL_PROMPT → nemotron3:33b.
+    """
+
+    heading: str
+    setting: str
+    time_of_day: str = "unknown"
+    characters: list[str] = []
+    description: str
+    model: Optional[str] = None
+
+
+class GeneratePromptResponse(BaseModel):
+    text: str
+    model: str
+    elapsed_seconds: float
+
+
+@app.post("/generate-prompt", response_model=GeneratePromptResponse)
+def generate_prompt(req: GeneratePromptRequest) -> GeneratePromptResponse:
+    import time as _time
+
+    t0 = _time.time()
+    try:
+        result = _prompt_gen.generate_prompt_for_shot(
+            heading=req.heading,
+            setting=req.setting,
+            time_of_day=req.time_of_day,
+            characters=req.characters,
+            description=req.description,
+            model=req.model,
+        )
+    except RuntimeError as exc:
+        # prompt_gen raises RuntimeError with user-readable detail —
+        # surface it directly.
+        raise HTTPException(status_code=503, detail=str(exc))
+    return GeneratePromptResponse(
+        text=result.text,
+        model=result.model,
+        elapsed_seconds=round(_time.time() - t0, 2),
+    )
 
 
 # ------- render -------
