@@ -1,21 +1,44 @@
 """FastAPI sidecar for the Script Visualizer Tauri app.
 
-Endpoints (skeleton — flesh out as features land):
-  GET  /healthz                 liveness
-  POST /parse                   screenplay file → list of scenes
-  POST /scenes/{i}/prompt       scene → image-gen prompt
-  POST /scenes/{i}/render       prompt → generated storyboard frame
-  GET  /styles                  available visual styles
+Endpoints:
+  GET  /healthz                       liveness
+  POST /parse                         {text: str} → {scenes: SceneDTO[]}
+  POST /render                        {scene_idx, prompt, style?} → {image_url, status}
+  GET  /styles                        list of style presets
+  GET  /scenes/{i}/preview.png        rendered storyboard image (when /render done)
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import base64
+import logging
+import os
+import uuid
+from pathlib import Path
+from typing import Optional
+
+import httpx
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from pydantic import BaseModel
+
+from src import ScriptParser
+from src.core.scene import Scene
+
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("script-visualizer")
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CACHE_DIR = REPO_ROOT / ".cache" / "renders"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# In-memory store of rendered images keyed by render_id (uuid).
+_renders: dict[str, bytes] = {}
 
 
 app = FastAPI(title="script-visualizer", version="0.1.0")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -29,6 +52,351 @@ app.add_middleware(
 )
 
 
+# ---------------------------------------------------------------------- DTOs
+
+
+class CharacterDTO(BaseModel):
+    name: str
+    description: str = ""
+    emotional_state: str = "neutral"
+
+
+class LocationDTO(BaseModel):
+    name: str
+    setting_type: str
+    description: str = ""
+    time_of_day: str = "unknown"
+
+
+class VisualStyleDTO(BaseModel):
+    tone: str = "neutral"
+    lighting: str = "natural"
+    atmosphere_keywords: list[str] = []
+
+
+class SceneDTO(BaseModel):
+    number: int
+    heading: str
+    location: LocationDTO
+    characters: list[CharacterDTO]
+    action_descriptions: list[str]
+    dialogue: list[tuple[str, str]]
+    visual_style: VisualStyleDTO
+    transitions: list[str]
+    base_prompt: str
+
+
+def _scene_to_dto(s: Scene) -> SceneDTO:
+    return SceneDTO(
+        number=s.number,
+        heading=s.heading,
+        location=LocationDTO(
+            name=s.location.name,
+            setting_type=s.location.setting_type,
+            description=s.location.description,
+            time_of_day=s.location.time_of_day.value,
+        ),
+        characters=[
+            CharacterDTO(
+                name=c.name,
+                description=c.description,
+                emotional_state=str(c.emotional_state),
+            )
+            for c in s.characters
+        ],
+        action_descriptions=s.action_descriptions,
+        dialogue=[(d[0], d[1]) for d in s.dialogue],
+        visual_style=VisualStyleDTO(
+            tone=s.visual_style.tone.value,
+            lighting=s.visual_style.lighting,
+            atmosphere_keywords=s.visual_style.atmosphere_keywords,
+        ),
+        transitions=s.transitions,
+        base_prompt=s.generate_base_prompt(),
+    )
+
+
+# ---------------------------------------------------------------------- routes
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True, "project": "script-visualizer"}
+
+
+class ParseRequest(BaseModel):
+    text: str
+
+
+class ParseResponse(BaseModel):
+    scenes: list[SceneDTO]
+
+
+@app.post("/parse", response_model=ParseResponse)
+def parse(req: ParseRequest) -> ParseResponse:
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="empty screenplay text")
+    parser = ScriptParser()
+    scenes = parser.parse_script(req.text)
+    return ParseResponse(scenes=[_scene_to_dto(s) for s in scenes])
+
+
+# ------- styles -------
+
+# Built-in style presets. The UI picks one and we append its modifiers to
+# the base scene prompt at render time.
+_STYLES: list[dict] = [
+    {
+        "id": "cinematic",
+        "name": "Cinematic",
+        "description": "Anamorphic, shallow depth of field, color graded.",
+        "modifiers": "cinematic still, anamorphic lens, shallow depth of field, "
+        "professional color grade, film grain, dramatic lighting",
+    },
+    {
+        "id": "storyboard-pencil",
+        "name": "Pencil Storyboard",
+        "description": "Black-and-white sketch, classic storyboard style.",
+        "modifiers": "rough pencil storyboard sketch, black and white, "
+        "loose hatching, animation pre-production aesthetic",
+    },
+    {
+        "id": "storyboard-marker",
+        "name": "Marker Storyboard",
+        "description": "Color marker storyboard with tonal washes.",
+        "modifiers": "color marker storyboard, copic markers, tonal washes, "
+        "key-frame illustration, professional storyboard art",
+    },
+    {
+        "id": "concept-art",
+        "name": "Concept Art",
+        "description": "Painterly, atmospheric, like a film concept piece.",
+        "modifiers": "atmospheric concept art, matte painting, dramatic lighting, "
+        "rich color palette, cinematic composition",
+    },
+    {
+        "id": "noir",
+        "name": "Film Noir",
+        "description": "High contrast black-and-white, hard shadows.",
+        "modifiers": "film noir, black and white, high contrast, hard shadows, "
+        "venetian blind light patterns, 1940s cinematography",
+    },
+]
+
+
+class StyleDTO(BaseModel):
+    id: str
+    name: str
+    description: str
+    modifiers: str
+
+
+@app.get("/styles", response_model=list[StyleDTO])
+def styles() -> list[StyleDTO]:
+    return [StyleDTO(**s) for s in _STYLES]
+
+
+# ------- render -------
+
+
+class RenderRequest(BaseModel):
+    scene_idx: int
+    prompt: str
+    style_id: Optional[str] = None
+    width: int = 1024
+    height: int = 576  # 16:9 storyboard
+    negative_prompt: str = ""
+
+
+class RenderResponse(BaseModel):
+    render_id: str
+    status: str  # "ok" | "stub" | "error"
+    image_url: str  # client GETs this to fetch the PNG
+    full_prompt: str
+    backend: str  # which backend produced the image
+    detail: str = ""
+
+
+def _resolve_style(style_id: Optional[str]) -> str:
+    if not style_id:
+        return ""
+    for s in _STYLES:
+        if s["id"] == style_id:
+            return s["modifiers"]
+    return ""
+
+
+def _placeholder_png(width: int, height: int, label: str) -> bytes:
+    """Render a placeholder PNG with the prompt text — used when no image
+    backend is configured. The user gets visible feedback that the pipeline
+    works end-to-end even before they wire up SD/Flux/ComfyUI/Replicate.
+    """
+    from PIL import Image, ImageDraw, ImageFont  # lazy import — heavy
+
+    img = Image.new("RGB", (width, height), color=(30, 32, 40))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 20)
+        small = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 14)
+    except OSError:
+        font = ImageFont.load_default()
+        small = ImageFont.load_default()
+    # Title
+    draw.text(
+        (24, 24),
+        "[ no image backend configured ]",
+        fill=(255, 200, 90),
+        font=font,
+    )
+    # Prompt — wrapped naively
+    margin = 24
+    max_width = width - 2 * margin
+    y = 70
+    line = ""
+    for word in label.split():
+        test = (line + " " + word).strip()
+        bbox = draw.textbbox((0, 0), test, font=small)
+        if bbox[2] - bbox[0] > max_width:
+            draw.text((margin, y), line, fill=(220, 220, 220), font=small)
+            y += 22
+            line = word
+            if y > height - 30:
+                break
+        else:
+            line = test
+    if line and y <= height - 30:
+        draw.text((margin, y), line, fill=(220, 220, 220), font=small)
+
+    import io
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+async def _render_via_a1111(
+    prompt: str, negative: str, w: int, h: int
+) -> Optional[bytes]:
+    """Try AUTOMATIC1111-compatible API at SD_URL. Returns None if not reachable."""
+    base = os.environ.get("SD_URL")
+    if not base:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            r = await client.post(
+                f"{base.rstrip('/')}/sdapi/v1/txt2img",
+                json={
+                    "prompt": prompt,
+                    "negative_prompt": negative,
+                    "width": w,
+                    "height": h,
+                    "steps": 28,
+                    "cfg_scale": 7.0,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            imgs = data.get("images") or []
+            if imgs:
+                return base64.b64decode(imgs[0])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("A1111 render failed: %s: %s", type(exc).__name__, exc)
+    return None
+
+
+async def _render_via_replicate(prompt: str, w: int, h: int) -> Optional[bytes]:
+    """Try Replicate (Flux) if REPLICATE_API_TOKEN is set."""
+    token = os.environ.get("REPLICATE_API_TOKEN")
+    if not token:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            r = await client.post(
+                "https://api.replicate.com/v1/predictions",
+                headers={
+                    "Authorization": f"Token {token}",
+                    "Prefer": "wait",
+                },
+                json={
+                    "version": "black-forest-labs/flux-schnell",
+                    "input": {
+                        "prompt": prompt,
+                        "aspect_ratio": "16:9",
+                        "output_format": "png",
+                        "num_outputs": 1,
+                    },
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            urls = data.get("output") or []
+            if isinstance(urls, str):
+                urls = [urls]
+            if urls:
+                img = await client.get(urls[0])
+                img.raise_for_status()
+                return img.content
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Replicate render failed: %s: %s", type(exc).__name__, exc)
+    return None
+
+
+@app.post("/render", response_model=RenderResponse)
+async def render(req: RenderRequest) -> RenderResponse:
+    style_modifiers = _resolve_style(req.style_id)
+    full_prompt = f"{req.prompt}, {style_modifiers}" if style_modifiers else req.prompt
+
+    img_bytes: Optional[bytes] = None
+    backend = "stub"
+    detail = ""
+
+    # Try real backends in order of preference, falling back to a placeholder.
+    img_bytes = await _render_via_a1111(
+        full_prompt, req.negative_prompt, req.width, req.height
+    )
+    if img_bytes:
+        backend = "a1111"
+    if img_bytes is None:
+        img_bytes = await _render_via_replicate(full_prompt, req.width, req.height)
+        if img_bytes:
+            backend = "replicate"
+    if img_bytes is None:
+        img_bytes = _placeholder_png(req.width, req.height, full_prompt)
+        backend = "stub"
+        detail = (
+            "No image backend configured. Set SD_URL=http://localhost:7860 for "
+            "AUTOMATIC1111, or REPLICATE_API_TOKEN=… for Flux. The placeholder "
+            "image is the prompt rendered as text."
+        )
+
+    render_id = str(uuid.uuid4())
+    _renders[render_id] = img_bytes
+    # Persist to disk so renders survive restarts.
+    (CACHE_DIR / f"{render_id}.png").write_bytes(img_bytes)
+
+    return RenderResponse(
+        render_id=render_id,
+        status="ok",
+        image_url=f"/renders/{render_id}.png",
+        full_prompt=full_prompt,
+        backend=backend,
+        detail=detail,
+    )
+
+
+@app.get("/renders/{render_id}.png")
+def get_render(render_id: str) -> Response:
+    img = _renders.get(render_id)
+    if img is None:
+        # Try disk cache.
+        path = CACHE_DIR / f"{render_id}.png"
+        if path.exists():
+            img = path.read_bytes()
+            _renders[render_id] = img
+    if img is None:
+        raise HTTPException(status_code=404, detail="render not found")
+    return Response(
+        content=img,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
