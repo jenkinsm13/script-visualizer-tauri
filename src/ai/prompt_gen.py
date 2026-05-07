@@ -61,12 +61,18 @@ Rules:
 5. Use the scene heading (INT./EXT., location, time of day) to set
    environment and lighting. INT. ... NIGHT → "interior, low warm
    practical lighting, deep shadows".
-6. Include character names verbatim if mentioned (the model will treat
-   them as labels). Don't invent age or appearance unless the shot
-   description specifies.
-7. Keep total length under ~60 words. Image-gen models perform worse on
+6. **Preserve named entities verbatim**, in their original casing, as
+   they appear in the shot description. Character names (ELIZA, STEPH),
+   vehicles (BRONCO, FORD BRONCO), props (TOY BRONCO), brands (FORD) —
+   keep them as written. The image model uses these as labels and you
+   lose the meaning if you lowercase them or paraphrase. If the shot
+   says "BRONCO" and context suggests a vehicle, you may add a brief
+   parenthetical hint once: "BRONCO (Ford Bronco SUV)" — but only if it
+   reduces ambiguity, and only on first mention in the prompt.
+7. Don't invent age or appearance unless the shot description specifies.
+8. Keep total length under ~60 words. Image-gen models perform worse on
    long prompts.
-8. Do NOT add quality-booster cliches like "8k resolution", "highly
+9. Do NOT add quality-booster cliches like "8k resolution", "highly
    detailed", "trending on artstation" — the style preset adds those.
 """
 
@@ -77,7 +83,7 @@ Scene heading: {heading}
 Setting: {setting} ({time_of_day})
 Characters in scene: {characters}
 Shot description: {description}
-
+{glossary_block}
 Generate the image-gen prompt now (one line, no preamble):"""
 
 
@@ -182,15 +188,28 @@ def generate_prompt_for_shot(
     characters: list[str],
     description: str,
     model: Optional[str] = None,
+    glossary: Optional[str] = None,
 ) -> GeneratedPrompt:
-    """Translate a single shot description into an image-gen prompt."""
+    """Translate a single shot description into an image-gen prompt.
+
+    glossary: optional project-level subject reference, e.g.
+      "BRONCO = 6th-gen Ford Bronco SUV, red, 4-door"
+      "ELIZA = woman 30s, brown hair, denim jacket"
+    Injected into the LLM input so named entities resolve consistently.
+    """
     use_model = model or DEFAULT_MODEL
+    glossary_block = (
+        f"\nProject subject glossary (treat these as the canonical look):\n{glossary.strip()}\n"
+        if glossary and glossary.strip()
+        else ""
+    )
     user = USER_TEMPLATE.format(
         heading=heading,
         setting=setting,
         time_of_day=time_of_day,
         characters=", ".join(characters) if characters else "(none specified)",
         description=description,
+        glossary_block=glossary_block,
     )
     raw = _ollama_generate(
         user,

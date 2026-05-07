@@ -26,14 +26,17 @@
   let styles = $state<StylePreset[]>([]);
   let selectedStyle = $state("cinematic");
 
-  // Render-resolution presets. 16:9 throughout — that's storyboard shape.
+  // 2:1 aspect (Univisium / cinematic storyboard). Dims are multiples of 64
+  // to match Flux's tile constraints — DrawThings rounds non-multiples down
+  // silently. Times are Flux.2 [dev] (32B) on M5 Max @ 30 steps.
   const RES_PRESETS = [
-    { id: "fast", label: "Fast (1024×576)", w: 1024, h: 576 },
-    { id: "hd", label: "HD (1920×1080)", w: 1920, h: 1080 },
-    { id: "2k", label: "2K (2048×1152)", w: 2048, h: 1152 },
-    { id: "qhd", label: "QHD (2560×1440)", w: 2560, h: 1440 },
+    { id: "low",    label: "Low 512×256 (~20-40s)",     w: 512,  h: 256 },
+    { id: "high",   label: "High 1024×512 (~60-90s)",   w: 1024, h: 512 },
+    { id: "ultra",  label: "Ultra 1280×640 (~2min)",    w: 1280, h: 640 },
+    { id: "hero",   label: "Hero 1920×960 (~5-7min)",   w: 1920, h: 960 },
+    { id: "final",  label: "Final 2048×1024 (~7-10min)", w: 2048, h: 1024 },
   ];
-  let selectedRes = $state("hd");
+  let selectedRes = $state("high");
   const currentRes = $derived(
     RES_PRESETS.find((r) => r.id === selectedRes) ?? RES_PRESETS[1],
   );
