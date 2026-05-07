@@ -1,0 +1,27 @@
+node_modules/
+.venv/
+venv/
+target/
+build/
+dist/
+out/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+.DS_Store
+
+# Tauri
+ui/src-tauri/target/
+ui/dist/
+
+# uv / lockfiles
+uv.lock
+
+# Generated outputs / scratch
+output/
+storyboards/
+.env
+.env.local
+*.log
