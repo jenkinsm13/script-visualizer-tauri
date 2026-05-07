@@ -26,6 +26,18 @@
   let styles = $state<StylePreset[]>([]);
   let selectedStyle = $state("cinematic");
 
+  // Render-resolution presets. 16:9 throughout — that's storyboard shape.
+  const RES_PRESETS = [
+    { id: "fast", label: "Fast (1024×576)", w: 1024, h: 576 },
+    { id: "hd", label: "HD (1920×1080)", w: 1920, h: 1080 },
+    { id: "2k", label: "2K (2048×1152)", w: 2048, h: 1152 },
+    { id: "qhd", label: "QHD (2560×1440)", w: 2560, h: 1440 },
+  ];
+  let selectedRes = $state("hd");
+  const currentRes = $derived(
+    RES_PRESETS.find((r) => r.id === selectedRes) ?? RES_PRESETS[1],
+  );
+
   async function ping() {
     try {
       health = await getHealth();
@@ -183,6 +195,14 @@
       <button onclick={openFile} disabled={parsing}>Open file…</button>
       <div class="spacer"></div>
       <label class="style-pick">
+        <span class="dim">size</span>
+        <select bind:value={selectedRes}>
+          {#each RES_PRESETS as r (r.id)}
+            <option value={r.id}>{r.label}</option>
+          {/each}
+        </select>
+      </label>
+      <label class="style-pick">
         <span class="dim">style</span>
         <select bind:value={selectedStyle}>
           {#each styles as s (s.id)}
@@ -216,7 +236,13 @@
   {:else if scenes.length > 0}
     <section class="grid">
       {#each scenes as scene (scene.number)}
-        <SceneCard {scene} styleId={selectedStyle} {styles} />
+        <SceneCard
+          {scene}
+          styleId={selectedStyle}
+          {styles}
+          width={currentRes.w}
+          height={currentRes.h}
+        />
       {/each}
     </section>
   {/if}

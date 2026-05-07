@@ -286,13 +286,20 @@ def generate_prompt(req: GeneratePromptRequest) -> GeneratePromptResponse:
 # ------- render -------
 
 
+_DEFAULT_W = int(os.environ.get("SV_RENDER_WIDTH", "1920"))
+_DEFAULT_H = int(os.environ.get("SV_RENDER_HEIGHT", "1080"))
+
+
 class RenderRequest(BaseModel):
     scene_idx: int
     prompt: str
     style_id: Optional[str] = None
-    width: int = 1024
-    height: int = 576  # 16:9 storyboard
+    width: int = _DEFAULT_W
+    height: int = _DEFAULT_H
     negative_prompt: str = ""
+    # Reference images for character/style/composition consistency. Each is
+    # a base64-encoded PNG/JPEG. Flux Kontext accepts up to ~4 references.
+    reference_images: list[str] = []
 
 
 class RenderResponse(BaseModel):
@@ -361,6 +368,19 @@ def _placeholder_png(width: int, height: int, label: str) -> bytes:
     return buf.getvalue()
 
 
+async def _render_via_fal(
+    prompt: str, w: int, h: int, refs: list[str]
+) -> Optional[tuple[bytes, str]]:
+    """Cloud Flux Kontext via fal.ai — kept disabled for now (user wants
+    fully local). Re-enable by setting FAL_KEY and uncommenting in render().
+    """
+    # Cloud disabled. The path stays here as a stub so /render's chain of
+    # backends keeps a place for it; flip the early return when we're
+    # ready to opt into cloud as a fallback (not the default).
+    _ = (prompt, w, h, refs)  # silence unused
+    return None
+
+
 async def _render_via_a1111(
     prompt: str, negative: str, w: int, h: int
 ) -> Optional[bytes]:
@@ -369,7 +389,9 @@ async def _render_via_a1111(
     if not base:
         return None
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        # Flux Kontext at 1920×1080 on Apple Silicon takes 45-90s; 240s
+        # gives headroom for cold model load on the first call.
+        async with httpx.AsyncClient(timeout=240.0) as client:
             r = await client.post(
                 f"{base.rstrip('/')}/sdapi/v1/txt2img",
                 json={

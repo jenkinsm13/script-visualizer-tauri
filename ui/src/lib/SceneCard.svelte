@@ -2,8 +2,14 @@
   import type { Scene, StylePreset } from "./api";
   import { generatePromptForScene, renderScene, renderImageUrl } from "./api";
 
-  type Props = { scene: Scene; styleId: string; styles: StylePreset[] };
-  let { scene, styleId }: Props = $props();
+  type Props = {
+    scene: Scene;
+    styleId: string;
+    styles: StylePreset[];
+    width?: number;
+    height?: number;
+  };
+  let { scene, styleId, width = 1920, height = 1080 }: Props = $props();
 
   let renderState = $state<"idle" | "loading" | "ready" | "error">("idle");
   let imageUrl = $state<string | null>(null);
@@ -63,6 +69,8 @@
         scene_idx: scene.number - 1,
         prompt: effectivePrompt,
         style_id: styleId,
+        width,
+        height,
       });
       imageUrl = renderImageUrl(r.image_url);
       renderBackend = r.backend;
